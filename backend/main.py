@@ -11,6 +11,14 @@ load_dotenv()
 
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+
+FALLBACK_MODELS = [
+    GROQ_MODEL,
+    "openai/gpt-oss-120b",
+    "qwen/qwen3.6-27b",
+    "groq/compound",
+]
 
 app = FastAPI(title="GitHub Onboarding Assistant")
 
@@ -23,6 +31,22 @@ app.add_middleware(
 )
 
 groq_client = Groq(api_key=GROQ_API_KEY)
+
+def get_groq_completion(messages: list, temperature: float = 0.3):
+    last_exception = None
+    models_to_try = list(dict.fromkeys(FALLBACK_MODELS))
+    for model in models_to_try:
+        try:
+            return groq_client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=temperature,
+            )
+        except Exception as e:
+            last_exception = e
+            print(f"[Warning] Failed to call Groq model '{model}': {e}. Trying fallback...")
+            continue
+    raise last_exception
 
 class RepoRequest(BaseModel):
     repo_url: str
@@ -102,8 +126,7 @@ def analyze_repo(req: RepoRequest):
 
     prompt = build_prompt(repo, readme, files, key_contents)
 
-    completion = groq_client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+    completion = get_groq_completion(
         messages=[
             {"role": "system", "content": "You are a senior engineer writing a friendly onboarding guide for a new open-source contributor."},
             {"role": "user", "content": prompt},
